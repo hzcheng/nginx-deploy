@@ -207,10 +207,11 @@ def create_tables(conn: sqlite3.Connection):
     )
 
     # knex_migrations_lock (required by NPM/knex migration system)
+    # Note: "index" is a SQLite reserved keyword, must be quoted
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS knex_migrations_lock (
-            index INTEGER PRIMARY KEY AUTOINCREMENT,
+            "index" INTEGER PRIMARY KEY AUTOINCREMENT,
             is_locked INTEGER DEFAULT 0
         )
         """
