@@ -87,13 +87,24 @@ main() {
   mkdir -p "${ACME_HOME_HOST}" "${CERT_ROOT_HOST}/live/${DOMAIN}"
 
   run_acme --set-default-ca --server letsencrypt
-  run_acme \
+
+  # 签发证书（如果已存在且未过期则跳过，acme.sh 返回码 2）
+  if ! run_acme \
     --issue \
     --dns dns_ali \
     --server letsencrypt \
     --accountemail "${LETSENCRYPT_EMAIL}" \
     -d "*.${DOMAIN}" \
-    --keylength ec-256
+    --keylength ec-256; then
+    rc=$?
+    if [ "$rc" -eq 2 ]; then
+      echo "Certificate already exists and is valid, skipping issue."
+    else
+      echo "ERROR: acme.sh issue failed with code $rc" >&2
+      exit $rc
+    fi
+  fi
+
   run_acme \
     --install-cert \
     -d "*.${DOMAIN}" \
