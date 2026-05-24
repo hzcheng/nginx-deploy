@@ -1,0 +1,14 @@
+# 预定义的基础服务
+# deploy.sh 中的 init-db.py 会读取此文件，自动创建 Proxy Host
+# 如果不需要预定义，可以留空或删除此文件
+
+services:
+  - name: nginx_ui
+    domain: nginx.teraai.cn
+    target: http://127.0.0.1:81
+
+  # 示例：添加家里 Home Assistant
+  # - name: home_assistant
+  #   domain: ha.teraai.cn
+  #   target: http://100.101.7.100:8123
+  #   websocket: true

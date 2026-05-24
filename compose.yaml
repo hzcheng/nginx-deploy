@@ -1,0 +1,4 @@
+include:
+  - ./tailscale/compose.yaml
+  - ./npm/compose.yaml
+  - ./derper/compose.yaml

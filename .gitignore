@@ -1,0 +1,7 @@
+.env
+tailscale/state/*
+npm/data/*
+npm/letsencrypt/*
+certbot/acme-home/*
+certbot/conf/*
+!*/.gitkeep

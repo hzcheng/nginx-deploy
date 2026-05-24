@@ -1,0 +1,14 @@
+services:
+  npm:
+    image: jc21/nginx-proxy-manager:${NPM_IMAGE_TAG:-latest}
+    container_name: npm
+    restart: unless-stopped
+    network_mode: service:tailscale
+    volumes:
+      - ./npm/data:/data
+      - ./npm/letsencrypt:/etc/letsencrypt
+      - ./certbot/conf:/certs:ro
+    depends_on:
+      - tailscale
+    environment:
+      - DB_SQLITE_FILE=/data/database.sqlite
