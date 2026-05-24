@@ -243,15 +243,90 @@ services:
 
 Derper 是 Tailscale 的自定义 DERP 中继，用于在 P2P 无法直连时中继流量。
 
+### 步骤 1：启用并启动容器
+
 ```bash
-# 1. 修改 .env
+# 修改 .env
 sed -i 's/ENABLE_DERPER=false/ENABLE_DERPER=true/' .env
 
-# 2. 重新部署
+# 重新部署（自动 build 并启动 derper 容器）
 ./scripts/deploy.sh
 ```
 
-然后在 NPM 中添加 `derper.teraai.cn` 的反代（`127.0.0.1:8080`）。
+### 步骤 2：在 NPM 中添加 Derper 反代
+
+1. 登录 `https://nginx.teraai.cn`
+2. **Hosts → Proxy Hosts → Add Proxy Host**
+3. 填写：
+   - **Domain Names**: `derper.teraai.cn`
+   - **Scheme**: `http`
+   - **Forward Hostname / IP**: `127.0.0.1`
+   - **Forward Port**: `8080`
+4. **SSL** 标签页：
+   - **SSL Certificate**: 选择 `*.teraai.cn` 通配符证书
+   - **Force SSL**: ✅
+5. **Advanced** 标签页添加（WebSocket 支持）：
+   ```nginx
+   proxy_set_header Upgrade $http_upgrade;
+   proxy_set_header Connection "upgrade";
+   proxy_read_timeout 86400;
+   proxy_buffering off;
+   ```
+6. 点击 **Save**
+
+### 步骤 3：在 Tailscale ACL 中注册自定义 DERP
+
+1. 访问 https://login.tailscale.com/admin/acls/file
+2. 在 JSON 中添加 `derpMap`（如果已有其他配置，合并进去即可）：
+   ```json
+   {
+     "derpMap": {
+       "OmitDefaultRegions": false,
+       "Regions": {
+         "900": {
+           "RegionID": 900,
+           "RegionCode": "myderp",
+           "RegionName": "My Cloud DERP",
+           "Nodes": [
+             {
+               "Name": "1",
+               "RegionID": 900,
+               "HostName": "derper.teraai.cn",
+               "DERPPort": 443,
+               "InsecureForTests": false
+             }
+           ]
+         }
+       }
+     }
+   }
+   ```
+3. 点击 **Save**
+
+### 步骤 4：验证是否成功
+
+**在云服务器上**：
+```bash
+# 确认 derper 容器在运行
+docker compose --profile derper ps
+
+# 查看日志无报错
+docker compose logs -f derper
+```
+
+**在家里主机上**：
+```bash
+# 查看当前使用的 DERP
+tailscale netcheck
+```
+
+如果输出中出现 `DERP: 900`（或你设置的 RegionID），说明自定义 DERP 已生效。
+
+**成功标准 checklist**：
+- [ ] `docker compose --profile derper ps` 显示 derper 状态为 `running`
+- [ ] `curl -I https://derper.teraai.cn` 返回 HTTP 200
+- [ ] `tailscale netcheck`（家里主机）显示 `DERP: 900`
+- [ ] `tailscale status`（家里主机）显示云服务器为 direct 或 via DERP 900
 
 ---
 
@@ -389,6 +464,17 @@ docker exec tailscale wget -qO- http://100.x.x.x:8123
 
 - [部署技术详情](docs/deployment-guide.md)
 - [SSL 证书方案设计](docs/ssl-cert-plan.md)
+
+---
+
+---
+
+## TODO
+
+以下功能尚未实现，欢迎 PR 或后续补充：
+
+- [ ] **自动配置 Tailscale ACL**：当前需要手动在 Tailscale 控制台粘贴 `derpMap` JSON。后续可支持在 `.env` 中配置 `TAILSCALE_API_KEY`，由 `deploy.sh` 自动调用 Tailscale API 写入 ACL。
+- [ ] **自动预填充 Derper 反代**：当前 `init-db.py` 不会自动创建 `derper.teraai.cn` 的 Proxy Host，需要手动在 NPM Web UI 中添加。后续可检测 `ENABLE_DERPER=true` 时自动预填充。
 
 ---
 
