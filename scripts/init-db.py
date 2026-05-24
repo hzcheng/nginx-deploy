@@ -103,7 +103,7 @@ def load_services():
     with open(SERVICES_FILE, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
 
-    return data.get("services", [])
+    return data.get("services") or []
 
 
 def create_tables(conn: sqlite3.Connection):

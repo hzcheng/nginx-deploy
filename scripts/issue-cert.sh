@@ -89,14 +89,15 @@ main() {
   run_acme --set-default-ca --server letsencrypt
 
   # 签发证书（如果已存在且未过期则跳过，acme.sh 返回码 2）
-  if ! run_acme \
+  run_acme \
     --issue \
     --dns dns_ali \
     --server letsencrypt \
     --accountemail "${LETSENCRYPT_EMAIL}" \
     -d "*.${DOMAIN}" \
-    --keylength ec-256; then
-    rc=$?
+    --keylength ec-256
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
     if [ "$rc" -eq 2 ]; then
       echo "Certificate already exists and is valid, skipping issue."
     else
