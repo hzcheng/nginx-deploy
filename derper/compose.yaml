@@ -1,7 +1,7 @@
 services:
   derper:
     build:
-      context: ./derper
+      context: .
     container_name: derper
     restart: unless-stopped
     network_mode: service:tailscale
