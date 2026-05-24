@@ -18,13 +18,14 @@ services:
         fi &&
         echo "Starting derper on HTTP port $${DERP_HTTP_PORT}..." &&
         derper
-        --hostname=$${DERP_HOSTNAME}
-        --certmode=manual
-        --certdir=/tmp/certs
-        --stun=true
-        --stun-port=${DERP_STUN_PORT:-3478}
-        --a=:$${DERP_HTTP_PORT}
-        --verify-clients
+        -hostname $${DERP_HOSTNAME}
+        -certmode manual
+        -certdir /tmp/certs
+        -stun
+        -stun-port ${DERP_STUN_PORT:-3478}
+        -a :$${DERP_HTTP_PORT}
+        -http-port 0
+        -verify-clients
       '
     depends_on:
       - tailscale

@@ -5,9 +5,9 @@ services:
     restart: unless-stopped
     network_mode: service:tailscale
     volumes:
-      - ./npm/data:/data
-      - ./npm/letsencrypt:/etc/letsencrypt
-      - ./certbot/conf:/certs:ro
+      - ./data:/data
+      - ./letsencrypt:/etc/letsencrypt
+      - ../certbot/conf:/certs:ro
     depends_on:
       - tailscale
     environment:
