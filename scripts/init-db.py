@@ -187,7 +187,8 @@ def create_tables(conn: sqlite3.Connection):
             disabled INTEGER NOT NULL DEFAULT 0,
             hsts_enabled INTEGER NOT NULL DEFAULT 0,
             hsts_subdomains INTEGER NOT NULL DEFAULT 0,
-            http3_support INTEGER NOT NULL DEFAULT 0
+            http3_support INTEGER NOT NULL DEFAULT 0,
+            locations TEXT DEFAULT '[]'
         )
         """
     )
@@ -201,6 +202,28 @@ def create_tables(conn: sqlite3.Connection):
             description TEXT NOT NULL,
             value TEXT NOT NULL,
             meta TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+
+    # knex_migrations_lock (required by NPM/knex migration system)
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knex_migrations_lock (
+            index INTEGER PRIMARY KEY AUTOINCREMENT,
+            is_locked INTEGER DEFAULT 0
+        )
+        """
+    )
+
+    # knex_migrations (required by NPM/knex migration system)
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knex_migrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            batch INTEGER NOT NULL,
+            migration_time DATETIME NOT NULL
         )
         """
     )
@@ -340,6 +363,71 @@ def setup_custom_ssl(cert_dir: Path, domain: str):
     print(f"Certificate installed to: {target_dir}")
 
 
+MIGRATION_NAMES = [
+    "20180618015850_initial.js",
+    "20180929054513_websockets.js",
+    "20181019052346_forward_host.js",
+    "20181113041458_http2_support.js",
+    "20181213013211_forward_scheme.js",
+    "20190104035154_disabled.js",
+    "20190215115310_customlocations.js",
+    "20190218060101_hsts.js",
+    "20190227065017_settings.js",
+    "20200410143839_access_list_client.js",
+    "20200410143840_access_list_client_fix.js",
+    "20201014143841_pass_auth.js",
+    "20210210154702_redirection_scheme.js",
+    "20210210154703_redirection_status_code.js",
+    "20210423103500_stream_domain.js",
+    "20211108145214_regenerate_default_host.js",
+]
+
+
+def _insert_knex_migrations(conn: sqlite3.Connection):
+    """插入 knex migration 记录，让 NPM 认为数据库已是最新版本。"""
+    c = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # 初始化 lock 表
+    c.execute("DELETE FROM knex_migrations_lock")
+    c.execute("INSERT INTO knex_migrations_lock (is_locked) VALUES (0)")
+
+    # 插入所有 migration 记录
+    for name in MIGRATION_NAMES:
+        c.execute(
+            """
+            INSERT INTO knex_migrations (name, batch, migration_time)
+            VALUES (?, ?, ?)
+            """,
+            (name, 1, now),
+        )
+
+    conn.commit()
+    print(f"Inserted {len(MIGRATION_NAMES)} knex migration records.")
+
+
+def _fix_permissions():
+    """调整 npm/data 目录的属主为 NPM 容器的 UID (911)。"""
+    try:
+        for path in [DATA_DIR, CUSTOM_SSL_DIR, DB_FILE]:
+            if path.exists():
+                os.chown(str(path), 911, 911)
+        # 递归设置 custom_ssl 子目录
+        if CUSTOM_SSL_DIR.exists():
+            for root, dirs, files in os.walk(str(CUSTOM_SSL_DIR)):
+                for d in dirs:
+                    os.chown(os.path.join(root, d), 911, 911)
+                for f in files:
+                    os.chown(os.path.join(root, f), 911, 911)
+        # 设置 letsencrypt 目录权限
+        letsencrypt_dir = ROOT_DIR / "npm" / "letsencrypt"
+        if letsencrypt_dir.exists():
+            os.chown(str(letsencrypt_dir), 911, 911)
+        print("Fixed permissions for UID 911.")
+    except PermissionError:
+        print("WARNING: Could not fix permissions. NPM may not be able to write to database.")
+
+
 def main():
     load_env()
 
@@ -435,12 +523,16 @@ def main():
         # 设置 custom_ssl
         setup_custom_ssl(cert_domain_dir, domain)
 
+        # 插入 knex migration 记录
+        _insert_knex_migrations(conn)
+
         print(f"Database initialized: {DB_FILE}")
         print(f"Custom SSL installed: {CUSTOM_SSL_DIR / CERT_NICE_NAME}")
         print("NPM will read this database on startup.")
 
     finally:
         conn.close()
+        _fix_permissions()
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ RUN go env -w GOPROXY=https://goproxy.cn,direct 2>/dev/null || true
 RUN go install tailscale.com/cmd/derper@latest
 
 # 运行阶段
-FROM alpine:latest
+FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /go/bin/derper /usr/local/bin/derper
 ENTRYPOINT ["derper"]
