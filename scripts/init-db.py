@@ -211,21 +211,22 @@ def create_tables(conn: sqlite3.Connection):
         """
     )
 
-    # knex_migrations_lock (required by NPM/knex migration system)
+    # migrations_lock (required by NPM/knex migration system)
     # Note: "index" is a SQLite reserved keyword, must be quoted
     c.execute(
         """
-        CREATE TABLE IF NOT EXISTS knex_migrations_lock (
+        CREATE TABLE IF NOT EXISTS migrations_lock (
             "index" INTEGER PRIMARY KEY AUTOINCREMENT,
             is_locked INTEGER DEFAULT 0
         )
         """
     )
 
-    # knex_migrations (required by NPM/knex migration system)
+    # migrations (required by NPM/knex migration system)
+    # NPM v2.x uses tableName: 'migrations', not 'knex_migrations'
     c.execute(
         """
-        CREATE TABLE IF NOT EXISTS knex_migrations (
+        CREATE TABLE IF NOT EXISTS migrations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             batch INTEGER NOT NULL,
@@ -391,19 +392,23 @@ MIGRATION_NAMES = [
 
 
 def _insert_knex_migrations(conn: sqlite3.Connection):
-    """插入 knex migration 记录，让 NPM 认为数据库已是最新版本。"""
+    """插入 migration 记录，让 NPM 认为数据库已是最新版本。
+
+    NPM v2.x 使用表名 'migrations'（db.js 中 tableName: 'migrations'），
+    不是 knex 默认的 'knex_migrations'。
+    """
     c = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # 初始化 lock 表
-    c.execute("DELETE FROM knex_migrations_lock")
-    c.execute("INSERT INTO knex_migrations_lock (is_locked) VALUES (0)")
+    c.execute("DELETE FROM migrations_lock")
+    c.execute("INSERT INTO migrations_lock (is_locked) VALUES (0)")
 
     # 插入所有 migration 记录
     for name in MIGRATION_NAMES:
         c.execute(
             """
-            INSERT INTO knex_migrations (name, batch, migration_time)
+            INSERT INTO migrations (name, batch, migration_time)
             VALUES (?, ?, ?)
             """,
             (name, 1, now),
