@@ -61,10 +61,10 @@ LETSENCRYPT_EMAIL=$(read_env_var "LETSENCRYPT_EMAIL")
 ALI_KEY=$(read_env_var "ALI_KEY")
 ALI_SECRET=$(read_env_var "ALI_SECRET")
 TS_AUTHKEY=$(read_env_var "TS_AUTHKEY")
-TAILSCALE_HOSTNAME=$(read_env_var "TAILSCALE_HOSTNAME" "cloud-server")
-NPM_IMAGE_TAG=$(read_env_var "NPM_IMAGE_TAG" "latest")
-ENABLE_DERPER=$(read_env_var "ENABLE_DERPER" "false")
-DERP_STUN_PORT=$(read_env_var "DERP_STUN_PORT" "3478")
+TAILSCALE_HOSTNAME=$(read_env_var "TAILSCALE_HOSTNAME" || echo "cloud-server")
+NPM_IMAGE_TAG=$(read_env_var "NPM_IMAGE_TAG" || echo "latest")
+ENABLE_DERPER=$(read_env_var "ENABLE_DERPER" || echo "false")
+DERP_STUN_PORT=$(read_env_var "DERP_STUN_PORT" || echo "3478")
 
 # 检查 .env 必填项
 for name in DOMAIN LETSENCRYPT_EMAIL ALI_KEY ALI_SECRET TS_AUTHKEY; do
