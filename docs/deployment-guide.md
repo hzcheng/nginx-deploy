@@ -386,24 +386,13 @@ services:
     environment:
       - DERP_HOSTNAME=${DERP_DOMAIN:-}
       - DERP_HTTP_PORT=${DERP_HTTP_PORT:-8080}
+    # 必须写成一行，YAML 的 > 折叠换行符会导致 derper 参数被 shell 当成独立命令
     command: >
-      /bin/sh -c '
-        if [ -z "$${DERP_HOSTNAME}" ]; then
-          echo "ERROR: DERP_DOMAIN is not set in .env" &&
-          exit 1;
-        fi &&
-        echo "Starting derper on HTTP port $${DERP_HTTP_PORT}..." &&
-        derper
-        -hostname $${DERP_HOSTNAME}
-        -a :$${DERP_HTTP_PORT}
-        -stun
-        -stun-port ${DERP_STUN_PORT:-3478}
-        -verify-clients
-      '
+      /bin/sh -c 'if [ -z "$${DERP_HOSTNAME}" ]; then echo "ERROR: DERP_DOMAIN is not set in .env" && exit 1; fi && echo "Starting derper on HTTP port $${DERP_HTTP_PORT}..." && derper -hostname $${DERP_HOSTNAME} -a :$${DERP_HTTP_PORT} -stun -stun-port ${DERP_STUN_PORT:-3478} -verify-clients'
     depends_on:
       - tailscale
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:${DERP_HTTP_PORT:-8080}/"]
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:${DERP_HTTP_PORT:-8080}/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -434,7 +423,8 @@ RUN go install tailscale.com/cmd/derper@${DERP_VERSION}
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /go/bin/derper /usr/local/bin/derper
-ENTRYPOINT ["derper"]
+# 使用 CMD 而非 ENTRYPOINT，让 compose.yaml 的 command 能完全覆盖
+CMD ["derper"]
 ```
 
 ### 4.7 `config/services.yml`（可选，预定义基础服务）

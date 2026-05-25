@@ -13,19 +13,7 @@ services:
       - DERP_HOSTNAME=${DERP_DOMAIN:-}
       - DERP_HTTP_PORT=${DERP_HTTP_PORT:-8080}
     command: >
-      /bin/sh -c '
-        if [ -z "$${DERP_HOSTNAME}" ]; then
-          echo "ERROR: DERP_DOMAIN is not set in .env" &&
-          exit 1;
-        fi &&
-        echo "Starting derper on HTTP port $${DERP_HTTP_PORT}..." &&
-        derper
-        -hostname $${DERP_HOSTNAME}
-        -a :$${DERP_HTTP_PORT}
-        -stun
-        -stun-port ${DERP_STUN_PORT:-3478}
-        -verify-clients
-      '
+      /bin/sh -c 'if [ -z "$${DERP_HOSTNAME}" ]; then echo "ERROR: DERP_DOMAIN is not set in .env" && exit 1; fi && echo "Starting derper on HTTP port $${DERP_HTTP_PORT}..." && derper -hostname $${DERP_HOSTNAME} -a :$${DERP_HTTP_PORT} -stun -stun-port ${DERP_STUN_PORT:-3478} -verify-clients'
     depends_on:
       - tailscale
     healthcheck:

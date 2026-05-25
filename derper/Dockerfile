@@ -12,4 +12,4 @@ RUN go install tailscale.com/cmd/derper@${DERP_VERSION}
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /go/bin/derper /usr/local/bin/derper
-ENTRYPOINT ["derper"]
+CMD ["derper"]
