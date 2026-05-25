@@ -744,11 +744,16 @@ def main():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CUSTOM_SSL_DIR.mkdir(parents=True, exist_ok=True)
 
-    # 如果数据库已存在，先备份
     if DB_FILE.exists():
-        backup = DB_FILE.with_suffix(f".sqlite.{datetime.now().strftime('%Y%m%d%H%M%S')}.backup")
-        DB_FILE.rename(backup)
-        print(f"Existing database backed up to: {backup}")
+        print(f"Database already exists: {DB_FILE}, skipping initialization.")
+        conn = sqlite3.connect(str(DB_FILE))
+        try:
+            # 重新生成 nginx 配置文件（容器重建后可能需要）
+            generate_nginx_configs(conn)
+        finally:
+            conn.close()
+        _fix_permissions()
+        return
 
     conn = sqlite3.connect(str(DB_FILE))
 
