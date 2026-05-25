@@ -2,11 +2,11 @@
 FROM golang:1.26-alpine AS builder
 WORKDIR /app
 
-# 设置 Go 代理（国内环境可加速）
-RUN go env -w GOPROXY=https://goproxy.cn,direct 2>/dev/null || true
+ARG GOPROXY=https://proxy.golang.org,direct
+RUN go env -w GOPROXY=${GOPROXY}
 
-# 安装 derper
-RUN go install tailscale.com/cmd/derper@latest
+ARG DERP_VERSION=v1.80.0
+RUN go install tailscale.com/cmd/derper@${DERP_VERSION}
 
 # 运行阶段
 FROM alpine:3.20

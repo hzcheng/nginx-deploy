@@ -1,13 +1,14 @@
 services:
   tailscale:
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:v1.82.0
     container_name: tailscale
     hostname: ${TAILSCALE_HOSTNAME:-cloud-server}
     restart: unless-stopped
+    # NET_ADMIN / NET_RAW / SYS_MODULE 和 /dev/net/tun 是 Tailscale 创建 TUN
+    # 设备并管理路由表所必需的（TS_USERSPACE=false 模式下）。
     cap_add:
       - NET_ADMIN
       - NET_RAW
-      - SYS_MODULE
     devices:
       - /dev/net/tun:/dev/net/tun
     sysctls:
@@ -26,3 +27,14 @@ services:
       - "127.0.0.1:81:81"
       - "41641:41641/udp"
       - "${DERP_STUN_PORT:-3478}:${DERP_STUN_PORT:-3478}/udp"
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3

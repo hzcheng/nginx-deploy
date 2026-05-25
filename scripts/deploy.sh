@@ -7,6 +7,28 @@ ENV_FILE="${ROOT_DIR}/.env"
 cd "${ROOT_DIR}"
 
 # ------------------------------------------------------------------------------
+# 辅助函数：从 .env 安全读取变量（不导出到全局环境）
+# ------------------------------------------------------------------------------
+read_env_var() {
+  local var_name="$1"
+  local file="${2:-${ENV_FILE}}"
+  awk -F= -v key="$var_name" '
+    BEGIN { found=0 }
+    $1 ~ "^[ \t]*" key "[ \t]*$" {
+      val = substr($0, index($0, "=") + 1)
+      sub(/^[ \t]+/, "", val)
+      sub(/[ \t]+$/, "", val)
+      gsub(/^["\047]/, "", val)
+      gsub(/["\047]$/, "", val)
+      print val
+      found=1
+      exit
+    }
+    END { if (!found) exit 1 }
+  ' "$file"
+}
+
+# ------------------------------------------------------------------------------
 # 检查前置条件
 # ------------------------------------------------------------------------------
 
@@ -15,10 +37,11 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   exit 1
 fi
 
-# 加载 .env
-set -a
-source "${ENV_FILE}"
-set +a
+# 检查 Python 3
+if ! command -v python3 &>/dev/null; then
+  echo "❌ Python 3 not found. Please install Python 3 first."
+  exit 1
+fi
 
 # 检查 Docker
 if ! command -v docker &>/dev/null; then
@@ -31,6 +54,17 @@ if ! docker compose version &>/dev/null; then
   echo "❌ Docker Compose plugin not found."
   exit 1
 fi
+
+# 安全加载 .env 变量（不导出到环境）
+DOMAIN=$(read_env_var "DOMAIN")
+LETSENCRYPT_EMAIL=$(read_env_var "LETSENCRYPT_EMAIL")
+ALI_KEY=$(read_env_var "ALI_KEY")
+ALI_SECRET=$(read_env_var "ALI_SECRET")
+TS_AUTHKEY=$(read_env_var "TS_AUTHKEY")
+TAILSCALE_HOSTNAME=$(read_env_var "TAILSCALE_HOSTNAME" "cloud-server")
+NPM_IMAGE_TAG=$(read_env_var "NPM_IMAGE_TAG" "latest")
+ENABLE_DERPER=$(read_env_var "ENABLE_DERPER" "false")
+DERP_STUN_PORT=$(read_env_var "DERP_STUN_PORT" "3478")
 
 # 检查 .env 必填项
 for name in DOMAIN LETSENCRYPT_EMAIL ALI_KEY ALI_SECRET TS_AUTHKEY; do
@@ -93,6 +127,11 @@ for i in {1..30}; do
   sleep 2
 done
 
+if ! curl -sf http://127.0.0.1:81/api/ &>/dev/null; then
+  echo "❌ NPM 启动失败。请检查日志: docker compose logs -f npm"
+  exit 1
+fi
+
 # ------------------------------------------------------------------------------
 # 5. 按需启动 Derper
 # ------------------------------------------------------------------------------
@@ -104,7 +143,8 @@ fi
 # ------------------------------------------------------------------------------
 # 6. 设置 cron 自动续签
 # ------------------------------------------------------------------------------
-CRON_JOB="0 3 * * 1 cd ${ROOT_DIR} && ./scripts/renew-cert.sh >> /var/log/acme-renew.log 2>&1"
+mkdir -p "${ROOT_DIR}/logs"
+CRON_JOB="0 3 * * 1 cd ${ROOT_DIR} && ./scripts/renew-cert.sh >> ${ROOT_DIR}/logs/acme-renew.log 2>&1"
 if ! (crontab -l 2>/dev/null | grep -qF "${ROOT_DIR}/scripts/renew-cert.sh"); then
   echo "📝 设置 cron 自动续签..."
   (crontab -l 2>/dev/null || true; echo "${CRON_JOB}") | crontab -
@@ -119,6 +159,5 @@ echo "✅ 部署完成！"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "🌐 管理界面: https://nginx.${DOMAIN}"
 echo "📧 默认账号: admin@example.com"
-echo "🔑 默认密码: changeme"
-echo "⚠️  请立即登录并修改密码"
+echo "⚠️  首次登录后请立即修改默认密码"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

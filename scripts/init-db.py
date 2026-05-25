@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlparse
 
 # ------------------------------------------------------------------------------
 # 配置路径
@@ -71,11 +72,8 @@ def parse_cert_expiry(cert_path: Path) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def split_fullchain(fullchain_path: Path):
-    """将 fullchain.pem 拆分为 cert.pem 和 chain.pem。"""
-    with open(fullchain_path, "r", encoding="utf-8") as f:
-        content = f.read()
-
+def split_fullchain_text(content: str):
+    """将 fullchain.pem 文本拆分为 cert.pem 和 chain.pem。"""
     certs = re.findall(
         r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
         content,
@@ -87,6 +85,13 @@ def split_fullchain(fullchain_path: Path):
     cert_pem = certs[0]
     chain_pem = "\n".join(certs[1:]) if len(certs) > 1 else cert_pem
     return cert_pem, chain_pem
+
+
+def split_fullchain(fullchain_path: Path):
+    """将 fullchain.pem 文件拆分为 cert.pem 和 chain.pem。"""
+    with open(fullchain_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return split_fullchain_text(content)
 
 
 def load_services():
@@ -343,11 +348,12 @@ def setup_custom_ssl(cert_dir: Path, domain: str):
         print(f"ERROR: Certificate not found: {fullchain_path}", file=sys.stderr)
         sys.exit(1)
 
-    cert_pem, chain_pem = split_fullchain(fullchain_path)
+    fullchain_text = fullchain_path.read_text(encoding="utf-8")
+    cert_pem, chain_pem = split_fullchain_text(fullchain_text)
 
     # 写入证书文件
-    (target_dir / "fullchain.pem").write_text(fullchain_path.read_text(), encoding="utf-8")
-    (target_dir / "privkey.pem").write_text(privkey_path.read_text(), encoding="utf-8")
+    (target_dir / "fullchain.pem").write_text(fullchain_text, encoding="utf-8")
+    (target_dir / "privkey.pem").write_text(privkey_path.read_text(encoding="utf-8"), encoding="utf-8")
     (target_dir / "cert.pem").write_text(cert_pem, encoding="utf-8")
     (target_dir / "chain.pem").write_text(chain_pem, encoding="utf-8")
 
@@ -413,13 +419,14 @@ def _fix_permissions():
         for path in [DATA_DIR, CUSTOM_SSL_DIR, DB_FILE]:
             if path.exists():
                 os.chown(str(path), 911, 911)
-        # 递归设置 custom_ssl 子目录
-        if CUSTOM_SSL_DIR.exists():
-            for root, dirs, files in os.walk(str(CUSTOM_SSL_DIR)):
-                for d in dirs:
-                    os.chown(os.path.join(root, d), 911, 911)
-                for f in files:
-                    os.chown(os.path.join(root, f), 911, 911)
+        # 递归设置 data 和 custom_ssl 子目录
+        for base_dir in [DATA_DIR, CUSTOM_SSL_DIR]:
+            if base_dir.exists():
+                for root, dirs, files in os.walk(str(base_dir)):
+                    for d in dirs:
+                        os.chown(os.path.join(root, d), 911, 911)
+                    for f in files:
+                        os.chown(os.path.join(root, f), 911, 911)
         # 设置 letsencrypt 目录权限
         letsencrypt_dir = ROOT_DIR / "npm" / "letsencrypt"
         if letsencrypt_dir.exists():
@@ -446,7 +453,7 @@ def main():
 
     # 如果数据库已存在，先备份
     if DB_FILE.exists():
-        backup = DB_FILE.with_suffix(".sqlite.backup")
+        backup = DB_FILE.with_suffix(f".sqlite.{datetime.now().strftime('%Y%m%d%H%M%S')}.backup")
         DB_FILE.rename(backup)
         print(f"Existing database backed up to: {backup}")
 
@@ -456,16 +463,6 @@ def main():
         create_tables(conn)
         insert_user(conn)
         cert_id = insert_certificate(conn, domain, cert_domain_dir)
-
-        # 默认反代：nginx.teraai.cn → NPM 管理界面
-        insert_proxy_host(
-            conn,
-            domain_names=[f"nginx.{domain}"],
-            forward_scheme="http",
-            forward_host="127.0.0.1",
-            forward_port=81,
-            certificate_id=cert_id,
-        )
 
         # 默认反代：www.teraai.cn → 导航页
         # 导航页的目标可以在 services.yml 中配置，默认反代到 127.0.0.1:80
@@ -478,7 +475,7 @@ def main():
             certificate_id=cert_id,
         )
 
-        # 从 services.yml 加载预定义服务
+        # 从 services.yml 加载预定义服务（包含 nginx_ui 等）
         services = load_services()
         for svc in services:
             domain_names = [svc["domain"]]
@@ -486,21 +483,10 @@ def main():
             websocket = svc.get("websocket", False)
 
             # 解析 target URL
-            if target.startswith("http://"):
-                scheme = "http"
-                target = target[7:]
-            elif target.startswith("https://"):
-                scheme = "https"
-                target = target[8:]
-            else:
-                scheme = "http"
-
-            if ":" in target:
-                host, port_str = target.rsplit(":", 1)
-                port = int(port_str)
-            else:
-                host = target
-                port = 80 if scheme == "http" else 443
+            parsed = urlparse(target)
+            scheme = parsed.scheme or "http"
+            host = parsed.hostname or "127.0.0.1"
+            port = parsed.port or (80 if scheme == "http" else 443)
 
             advanced = ""
             if websocket:

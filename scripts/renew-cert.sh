@@ -1,11 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${ROOT_DIR}/.env"
-ACME_HOME_HOST="${ROOT_DIR}/certbot/acme-home"
-CERT_ROOT_HOST="${ROOT_DIR}/certbot/conf"
-ACME_IMAGE="${ACME_IMAGE:-neilpang/acme.sh:latest}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/acme-common.sh"
 
 print_help() {
   cat <<'EOF'
@@ -18,46 +15,8 @@ Required values in .env:
   ALI_KEY
   ALI_SECRET
 
-After renewal, syncs the new certificate to NPM and restarts the container.
+After renewal, syncs the new certificate to NPM and reloads nginx.
 EOF
-}
-
-require_env_file() {
-  if [[ ! -f "${ENV_FILE}" ]]; then
-    echo ".env not found." >&2
-    exit 1
-  fi
-}
-
-load_env() {
-  set -a
-  source "${ENV_FILE}"
-  set +a
-}
-
-require_values() {
-  local missing=()
-
-  for name in DOMAIN ALI_KEY ALI_SECRET; do
-    if [[ -z "${!name:-}" ]]; then
-      missing+=("${name}")
-    fi
-  done
-
-  if (( ${#missing[@]} > 0 )); then
-    printf 'Missing required values in .env: %s\n' "${missing[*]}" >&2
-    exit 1
-  fi
-}
-
-run_acme() {
-  docker run --rm \
-    -e Ali_Key="${ALI_KEY}" \
-    -e Ali_Secret="${ALI_SECRET}" \
-    -v "${ACME_HOME_HOST}:/acme.sh" \
-    -v "${CERT_ROOT_HOST}:/output" \
-    "${ACME_IMAGE}" \
-    "$@"
 }
 
 main() {
@@ -77,11 +36,10 @@ main() {
 
   require_env_file
   load_env
-  require_values
+  require_values DOMAIN ALI_KEY ALI_SECRET
 
   mkdir -p "${ACME_HOME_HOST}" "${CERT_ROOT_HOST}/live/${DOMAIN}"
 
-  run_acme --set-default-ca --server letsencrypt
   run_acme --cron
   run_acme \
     --install-cert \
@@ -92,11 +50,11 @@ main() {
 
   echo "Certificate renewed and installed."
 
-  # Sync to NPM custom_ssl directory and restart
+  # Sync to NPM custom_ssl directory and reload nginx
   "${ROOT_DIR}/scripts/sync-cert-to-npm.sh"
 
-  echo "Restarting NPM to load new certificate..."
-  docker compose -f "${ROOT_DIR}/compose.yaml" restart npm
+  echo "Reloading NPM nginx to load new certificate..."
+  docker compose -f "${ROOT_DIR}/compose.yaml" exec npm nginx -s reload
 }
 
 main "$@"

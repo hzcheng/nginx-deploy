@@ -1,23 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${ROOT_DIR}/.env"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/acme-common.sh"
+
 CERT_DIR="${ROOT_DIR}/certbot/conf/live"
 NPM_SSL_DIR="${ROOT_DIR}/npm/data/custom_ssl"
-
-require_env_file() {
-  if [[ ! -f "${ENV_FILE}" ]]; then
-    echo ".env not found." >&2
-    exit 1
-  fi
-}
-
-load_env() {
-  set -a
-  source "${ENV_FILE}"
-  set +a
-}
 
 main() {
   require_env_file
@@ -39,7 +27,16 @@ main() {
   FOUND=0
   for dir in "${NPM_SSL_DIR}"/*/; do
     if [[ -f "$dir/metadata.json" ]]; then
-      if grep -q "${DOMAIN}" "$dir/metadata.json" 2>/dev/null; then
+      # 用 python3 精确匹配域名，避免 grep 误匹配
+      if python3 -c "
+import json, sys
+with open('$dir/metadata.json') as f:
+    data = json.load(f)
+for name in data.get('domain_names', []):
+    if '${DOMAIN}' in name:
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null; then
         cp "${SRC_DIR}/fullchain.pem" "$dir/fullchain.pem"
         cp "${SRC_DIR}/privkey.pem" "$dir/privkey.pem"
         echo "Synced to $dir"
