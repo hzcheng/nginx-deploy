@@ -418,13 +418,148 @@ def _insert_knex_migrations(conn: sqlite3.Connection):
     print(f"Inserted {len(MIGRATION_NAMES)} knex migration records.")
 
 
+NGINX_PROXY_HOST_DIR = DATA_DIR / "nginx" / "proxy_host"
+
+
+def _nginx_conf_header(domain_names):
+    return f"# ------------------------------------------------------------\n# {', '.join(domain_names)}\n# ------------------------------------------------------------\n"
+
+
+def _nginx_conf_body(host_id, domain_names, forward_scheme, forward_host,
+                     forward_port, certificate_id, ssl_forced, http2_support,
+                     block_exploits, hsts_enabled, allow_websocket_upgrade,
+                     advanced_config):
+    """Generate a single NPM-style proxy_host nginx config."""
+    lines = [_nginx_conf_header(domain_names)]
+    lines.append("")
+    lines.append("server {")
+    lines.append(f'  set $forward_scheme {forward_scheme};')
+    lines.append(f'  set $server         "{forward_host}";')
+    lines.append(f'  set $port           {forward_port};')
+    lines.append("")
+    # Listen directives
+    lines.append("  listen 80;")
+    lines.append("  listen [::]:80;")
+    if certificate_id and certificate_id > 0:
+        http2 = " http2" if http2_support else ""
+        lines.append(f"  listen 443 ssl{http2};")
+        lines.append(f"  listen [::]:443 ssl{http2};")
+    lines.append(f'  server_name {" ".join(domain_names)};')
+    lines.append("")
+    # SSL cert
+    if certificate_id and certificate_id > 0:
+        lines.append("  # Custom SSL")
+        lines.append(f"  ssl_certificate /data/custom_ssl/npm-{certificate_id}/fullchain.pem;")
+        lines.append(f"  ssl_certificate_key /data/custom_ssl/npm-{certificate_id}/privkey.pem;")
+        lines.append("")
+    # Block exploits
+    if block_exploits:
+        lines.append("  # Block Exploits")
+        lines.append("  include conf.d/include/block-exploits.conf;")
+        lines.append("")
+    # HSTS
+    if certificate_id and certificate_id > 0 and ssl_forced and hsts_enabled:
+        lines.append("  # HSTS")
+        lines.append("  add_header Strict-Transport-Security $hsts_header always;")
+        lines.append("")
+    # Force SSL
+    if certificate_id and certificate_id > 0 and ssl_forced:
+        lines.append("  # Force SSL")
+        lines.append("  include conf.d/include/force-ssl.conf;")
+        lines.append("")
+    # Websocket
+    if allow_websocket_upgrade:
+        lines.append("proxy_set_header Upgrade $http_upgrade;")
+        lines.append("proxy_set_header Connection $http_connection;")
+        lines.append("proxy_http_version 1.1;")
+        lines.append("")
+    # Logs
+    lines.append(f"  access_log /data/logs/proxy-host-{host_id}_access.log proxy;")
+    lines.append(f"  error_log /data/logs/proxy-host-{host_id}_error.log warn;")
+    lines.append("")
+    # Advanced config
+    if advanced_config:
+        lines.append(advanced_config)
+        lines.append("")
+    # Location block
+    lines.append("  location / {")
+    lines.append("")
+    if certificate_id and certificate_id > 0 and ssl_forced and hsts_enabled:
+        lines.append("    # HSTS")
+        lines.append("    add_header Strict-Transport-Security $hsts_header always;")
+        lines.append("")
+    if allow_websocket_upgrade:
+        lines.append("    proxy_set_header Upgrade $http_upgrade;")
+        lines.append("    proxy_set_header Connection $http_connection;")
+        lines.append("    proxy_http_version 1.1;")
+        lines.append("")
+    lines.append("    # Proxy!")
+    lines.append("    include conf.d/include/proxy.conf;")
+    lines.append("  }")
+    lines.append("")
+    lines.append("  # Custom")
+    lines.append("  include /data/nginx/custom/server_proxy[.]conf;")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
+def generate_nginx_configs(conn: sqlite3.Connection):
+    """从数据库生成 /data/nginx/proxy_host/*.conf 文件。
+
+    NPM 仅在通过 API 创建/更新 Proxy Host 时生成 nginx 配置，
+    不会在启动时从数据库重建。因此首次部署时必须手动生成这些文件。
+    """
+    NGINX_PROXY_HOST_DIR.mkdir(parents=True, exist_ok=True)
+
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, domain_names, forward_scheme, forward_host, forward_port,
+               certificate_id, ssl_forced, http2_support, block_exploits,
+               hsts_enabled, allow_websocket_upgrade, advanced_config
+        FROM proxy_host
+        WHERE is_deleted = 0 AND disabled = 0
+    """)
+
+    count = 0
+    for row in c.fetchall():
+        (host_id, domain_names_json, forward_scheme, forward_host,
+         forward_port, certificate_id, ssl_forced, http2_support,
+         block_exploits, hsts_enabled, allow_websocket_upgrade,
+         advanced_config) = row
+
+        domain_names = json.loads(domain_names_json)
+
+        conf_content = _nginx_conf_body(
+            host_id=host_id,
+            domain_names=domain_names,
+            forward_scheme=forward_scheme or "http",
+            forward_host=forward_host,
+            forward_port=forward_port,
+            certificate_id=certificate_id,
+            ssl_forced=ssl_forced,
+            http2_support=http2_support,
+            block_exploits=block_exploits,
+            hsts_enabled=hsts_enabled,
+            allow_websocket_upgrade=allow_websocket_upgrade,
+            advanced_config=advanced_config or "",
+        )
+
+        conf_path = NGINX_PROXY_HOST_DIR / f"{host_id}.conf"
+        conf_path.write_text(conf_content, encoding="utf-8")
+        print(f"Generated nginx config: {conf_path}")
+        count += 1
+
+    print(f"Generated {count} nginx proxy host config(s).")
+    return count
+
+
 def _fix_permissions():
     """调整 npm/data 目录的属主为 NPM 容器的 UID (911)。"""
     try:
         for path in [DATA_DIR, CUSTOM_SSL_DIR, DB_FILE]:
             if path.exists():
                 os.chown(str(path), 911, 911)
-        # 递归设置 data 和 custom_ssl 子目录
+        # 递归设置 data、custom_ssl 和 letsencrypt 子目录
         for base_dir in [DATA_DIR, CUSTOM_SSL_DIR]:
             if base_dir.exists():
                 for root, dirs, files in os.walk(str(base_dir)):
@@ -517,6 +652,10 @@ def main():
 
         # 插入 knex migration 记录
         _insert_knex_migrations(conn)
+
+        # 生成 nginx proxy host 配置文件
+        # NPM 只在通过 API 操作时才生成配置，启动时不会从数据库重建
+        generate_nginx_configs(conn)
 
         print(f"Database initialized: {DB_FILE}")
         print(f"Custom SSL installed: {CUSTOM_SSL_DIR / CERT_NICE_NAME}")
