@@ -43,7 +43,10 @@ nginx-deploy/
 │   ├── init-db.py            # 预生成 NPM 数据库
 │   ├── issue-cert.sh         # 首次签发证书
 │   ├── renew-cert.sh         # 自动续签
-│   └── sync-cert-to-npm.sh   # 证书同步
+│   ├── sync-cert-to-npm.sh   # 证书同步
+│   ├── uninstall.sh          # 一键卸载/清理
+│   └── lib/
+│       └── acme-common.sh    # 证书脚本共享库
 ├── config/
 │   └── services.yml          # 预定义服务（可选）
 ├── certbot/                  # acme.sh 证书目录
@@ -178,8 +181,7 @@ DERP_STUN_PORT=3478
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🌐 管理界面: https://nginx.teraai.cn
 📧 默认账号: admin@example.com
-🔑 默认密码: changeme
-⚠️  请立即登录并修改密码
+⚠️  首次登录后请立即修改默认密码
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -369,6 +371,25 @@ tar xzf nginx-deploy-backup-20260524.tar.gz
 docker compose up -d
 ```
 
+### 卸载与重新部署
+
+项目提供一键清理脚本，方便测试或彻底重装：
+
+```bash
+# 完整清理（删除所有容器、数据、证书和 cron 任务）
+./scripts/uninstall.sh
+
+# 自动化测试时跳过交互确认
+./scripts/uninstall.sh --yes
+
+# 保留 Tailscale（不删除容器和认证状态，避免重新申请 auth key）
+./scripts/uninstall.sh --yes --keep-tailscale
+```
+
+清理完成后，直接重新运行 `./scripts/deploy.sh` 即可重新部署。
+
+> ⚠️ **注意**：完整清理会删除 `certbot/` 目录，导致 acme.sh 丢失已申请的证书记录。Let's Encrypt 对同一域名有速率限制，**不要频繁完整清理+重部署**。如需频繁测试，可保留 `certbot/` 目录，或临时切换到 Let's Encrypt Staging 环境。
+
 ### 更新镜像
 
 ```bash
@@ -457,6 +478,7 @@ docker exec tailscale wget -qO- http://100.x.x.x:8123
 - ✅ 81 端口不暴露在公网
 - ✅ Tailscale Auth Key 设置为 **Reusable + Not Ephemeral**
 - ✅ 定期检查 Tailscale Machines 列表，移除不认识设备
+- ✅ deploy.sh 使用 `read_env_var()` 安全读取 `.env`，不会将密钥导出到全局环境（避免子进程继承敏感变量）
 
 ---
 
@@ -478,4 +500,4 @@ docker exec tailscale wget -qO- http://100.x.x.x:8123
 
 ---
 
-*项目版本: 2.0*
+*项目版本: 2.1*

@@ -104,7 +104,7 @@
 | Tailscale P2P 直连 | `云服务器 ↔ UDP 41641 ↔ 家里` (WireGuard) |
 | Tailscale DERP 中继 | `云服务器 ↔ Derper ↔ 家里` (TCP/WebSocket over HTTPS) |
 | 管理员配置 NPM | `管理员 → https://nginx.teraai.cn → NPM Web UI`（HTTPS） |
-| 证书自动续签 | `acme.sh --cron` → 同步到 NPM → `docker compose restart npm` |
+| 证书自动续签 | `acme.sh --cron` → 同步到 NPM → `docker compose exec npm nginx -s reload` |
 | 裸域名访问 | `teraai.cn` 不在证书覆盖范围，建议用 `www.teraai.cn` |
 
 ### 1.3 关键技术决策
@@ -197,7 +197,10 @@ nginx-deploy/
 │   ├── init-db.py              # 预生成 NPM SQLite 数据库
 │   ├── issue-cert.sh           # 首次签发 SSL 证书
 │   ├── renew-cert.sh           # 自动续签证书
-│   └── sync-cert-to-npm.sh     # 同步证书到 NPM 并 restart
+│   ├── sync-cert-to-npm.sh     # 同步证书到 NPM 并 reload
+│   ├── uninstall.sh            # 一键卸载/清理
+│   └── lib/
+│       └── acme-common.sh      # 证书脚本共享库（acme.sh 镜像版本、通用函数）
 ├── config/
 │   └── services.yml            # 预定义的基础服务（可选）
 ├── certbot/                    # acme.sh 证书管理
@@ -292,14 +295,13 @@ Tailscale 作为网络核心层，所有公网端口在此映射：
 ```yaml
 services:
   tailscale:
-    image: tailscale/tailscale:latest
+    image: tailscale/tailscale:v1.82.0
     container_name: tailscale
     hostname: ${TAILSCALE_HOSTNAME:-cloud-server}
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
       - NET_RAW
-      - SYS_MODULE
     devices:
       - /dev/net/tun:/dev/net/tun
     sysctls:
@@ -318,6 +320,17 @@ services:
       - "127.0.0.1:81:81"
       - "41641:41641/udp"
       - "${DERP_STUN_PORT:-3478}:${DERP_STUN_PORT:-3478}/udp"
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3
 ```
 
 ### 4.4 `npm/compose.yaml`
@@ -339,6 +352,17 @@ services:
       - tailscale
     environment:
       - DB_SQLITE_FILE=/data/database.sqlite
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:81/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3
 ```
 
 > ⚠️ **务必使用 `${NPM_IMAGE_TAG}` 锁定版本**，不要用 `latest`。预填充数据库脚本依赖特定表结构。
@@ -352,6 +376,8 @@ services:
   derper:
     build:
       context: .
+      args:
+        - GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}
     container_name: derper
     restart: unless-stopped
     network_mode: service:tailscale
@@ -368,16 +394,25 @@ services:
         fi &&
         echo "Starting derper on HTTP port $${DERP_HTTP_PORT}..." &&
         derper
-        --hostname=$${DERP_HOSTNAME}
-        --certmode=manual
-        --certdir=/tmp/certs
-        --stun=true
-        --stun-port=${DERP_STUN_PORT:-3478}
-        --a=:$${DERP_HTTP_PORT}
-        --verify-clients
+        -hostname $${DERP_HOSTNAME}
+        -a :$${DERP_HTTP_PORT}
+        -stun
+        -stun-port ${DERP_STUN_PORT:-3478}
+        -verify-clients
       '
     depends_on:
       - tailscale
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:${DERP_HTTP_PORT:-8080}/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: 3
 ```
 
 ### 4.6 `derper/Dockerfile`
@@ -385,13 +420,15 @@ services:
 ```dockerfile
 # 构建阶段
 FROM golang:1.26-alpine AS builder
+ARG GOPROXY=https://proxy.golang.org,direct
+ARG DERP_VERSION=v1.80.0
 WORKDIR /app
 
 # 设置 Go 代理（国内环境可加速）
-RUN go env -w GOPROXY=https://goproxy.cn,direct 2>/dev/null || true
+RUN go env -w GOPROXY=${GOPROXY}
 
-# 安装 derper
-RUN go install tailscale.com/cmd/derper@latest
+# 安装指定版本的 derper
+RUN go install tailscale.com/cmd/derper@${DERP_VERSION}
 
 # 运行阶段
 FROM alpine:3.20
@@ -491,8 +528,7 @@ DERP_STUN_PORT=3478
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 🌐 管理界面: https://nginx.teraai.cn
 📧 默认账号: admin@example.com
-🔑 默认密码: changeme
-⚠️  请立即登录并修改密码
+⚠️  首次登录后请立即修改默认密码
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
@@ -565,7 +601,7 @@ NPM 容器内（通过卷挂载）：
 `renew-cert.sh` 每周运行一次：
 1. `acme.sh --cron` 检测并续签证书
 2. 新证书复制到 `./npm/data/custom_ssl/npm-1/`
-3. `docker compose restart npm` 重启加载新证书
+3. `docker compose exec npm nginx -s reload` 热重载 Nginx 加载新证书（无需重启容器）
 
 > ⚠️ **NPM 版本已锁定**，升级版本前需重新测试 `init-db.py` 的兼容性。
 
@@ -874,6 +910,25 @@ tar xzf nginx-deploy-backup-20260524.tar.gz
 docker compose up -d
 ```
 
+### 9.6 卸载与重新部署
+
+如需彻底清理环境（例如测试一键部署能力），使用提供的清理脚本：
+
+```bash
+# 交互式清理（会提示确认）
+./scripts/uninstall.sh
+
+# 自动化测试：跳过确认
+./scripts/uninstall.sh --yes
+
+# 保留 Tailscale：不删除容器和认证状态，避免重新申请 auth key
+./scripts/uninstall.sh --yes --keep-tailscale
+```
+
+清理完成后，直接重新运行 `./scripts/deploy.sh` 即可重新部署。
+
+> ⚠️ **注意**：完整清理会删除 `certbot/` 目录，导致 acme.sh 丢失已申请的证书记录。Let's Encrypt 对同一域名有速率限制（每周最多 50 张新证书），**不要频繁完整清理+重部署**。如需频繁测试，建议保留 `certbot/` 目录，或在 `issue-cert.sh` 中临时切换到 Let's Encrypt Staging 环境。
+
 ---
 
 ## 10. 故障排查
@@ -914,7 +969,7 @@ docker exec tailscale tailscale netcheck
 
 3. **检查 acme.sh 日志**：
    ```bash
-   docker run --rm -v ./certbot/acme-home:/acme.sh neilpang/acme.sh:latest --list
+   docker run --rm -v ./certbot/acme-home:/acme.sh neilpang/acme.sh:3.1.0 --list
    ```
 
 4. **确认 NPM 中的证书是否已同步**：
@@ -1014,7 +1069,7 @@ curl -I https://derper.teraai.cn
 - ✅ 考虑启用 NPM 的 Two-Factor Authentication
 - ✅ 在 Tailscale ACL 中可以进一步限制设备访问权限
 
-### 11.5 文件权限
+### 11.5 文件权限与环境变量
 
 ```bash
 # .env 包含 AliDNS API 密钥，必须限制访问权限
@@ -1026,6 +1081,10 @@ docker compose up -d npm
 # 如遇到权限问题，查看容器日志后调整：
 # sudo chown -R 911:911 npm/data
 ```
+
+- ✅ `deploy.sh` 使用 `read_env_var()` 函数安全读取 `.env`，**不会通过 `source .env` 将密钥导出到全局环境**，避免子进程继承敏感变量
+- ✅ `acme-common.sh` 同样使用 `read_env_var()`，仅在脚本内部使用变量，不泄漏到外部
+- ✅ 不要在命令行中直接导出 `ALI_SECRET` 等敏感变量
 
 ### 11.6 防火墙配置
 
@@ -1065,5 +1124,5 @@ Tailscale Auth Key 默认 90 天过期。到期后：
 
 ---
 
-*文档版本: 2.0*
-*最后更新: 2026-05-24*
+*文档版本: 2.1*
+*最后更新: 2026-05-25*

@@ -53,12 +53,12 @@ acme.sh --issue --dns dns_ali \
 - `sync-cert-to-npm.sh` 遍历 `./npm/data/custom_ssl/` 下所有目录，读取 `metadata.json`，找到包含 `teraai.cn` 的条目
 - 将 `fullchain.pem` 和 `privkey.pem` 复制到对应目录
 - 执行 `docker compose exec npm nginx -s reload`
-- 不依赖 sqlite3，只依赖 `grep` 和文件操作
+- 使用 `python3` 解析 `metadata.json` 精确匹配域名，避免 `grep` 误匹配
 
 ### Cron 自动续签
 在部署指南中说明：将 `renew-cert.sh` 加入宿主机 crontab（建议每周运行一次）：
 ```cron
-0 3 * * 1 cd /opt/nginx-deploy && ./scripts/renew-cert.sh >> /opt/nginx-deploy/logs/acme-renew.log 2>&1
+0 3 * * 1 cd /path/to/nginx-deploy && ./scripts/renew-cert.sh >> ./logs/acme-renew.log 2>&1
 ```
 
 ## Risk / Mitigation
