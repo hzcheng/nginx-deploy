@@ -112,10 +112,15 @@ def load_services():
 
 
 def create_tables(conn: sqlite3.Connection):
-    """创建 NPM 所需的 SQLite 表（基于 v2.11.3 schema）。"""
+    """创建 NPM 所需的 SQLite 表（v2.11.3 全部 migration 完成后的最终 schema）。
+
+    migrate.js 显式调用 db.migrate.latest({tableName: 'migrations', ...})，
+    因此 migration 记录表必须命名为 migrations。
+    """
     c = conn.cursor()
 
-    # user
+    # --- 核心功能表 ---
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS user (
@@ -133,7 +138,6 @@ def create_tables(conn: sqlite3.Connection):
         """
     )
 
-    # auth
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS auth (
@@ -149,7 +153,24 @@ def create_tables(conn: sqlite3.Connection):
         """
     )
 
-    # certificate
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_permission (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER NOT NULL UNIQUE,
+            visibility TEXT NOT NULL DEFAULT 'all',
+            proxy_hosts TEXT NOT NULL DEFAULT 'manage',
+            redirection_hosts TEXT NOT NULL DEFAULT 'manage',
+            dead_hosts TEXT NOT NULL DEFAULT 'manage',
+            streams TEXT NOT NULL DEFAULT 'manage',
+            access_lists TEXT NOT NULL DEFAULT 'manage',
+            certificates TEXT NOT NULL DEFAULT 'manage'
+        )
+        """
+    )
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS certificate (
@@ -167,7 +188,6 @@ def create_tables(conn: sqlite3.Connection):
         """
     )
 
-    # proxy_host
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS proxy_host (
@@ -189,16 +209,14 @@ def create_tables(conn: sqlite3.Connection):
             allow_websocket_upgrade INTEGER NOT NULL DEFAULT 0,
             http2_support INTEGER NOT NULL DEFAULT 0,
             forward_scheme TEXT NOT NULL DEFAULT '',
-            disabled INTEGER NOT NULL DEFAULT 0,
+            enabled INTEGER NOT NULL DEFAULT 1,
             hsts_enabled INTEGER NOT NULL DEFAULT 0,
             hsts_subdomains INTEGER NOT NULL DEFAULT 0,
-            http3_support INTEGER NOT NULL DEFAULT 0,
             locations TEXT DEFAULT '[]'
         )
         """
     )
 
-    # setting
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS setting (
@@ -211,8 +229,135 @@ def create_tables(conn: sqlite3.Connection):
         """
     )
 
-    # migrations_lock (required by NPM/knex migration system)
-    # Note: "index" is a SQLite reserved keyword, must be quoted
+    # --- NPM 完整功能所需的辅助表 ---
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS redirection_host (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            owner_user_id INTEGER NOT NULL DEFAULT 1,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            domain_names TEXT NOT NULL,
+            forward_domain_name TEXT NOT NULL,
+            preserve_path INTEGER NOT NULL DEFAULT 0,
+            certificate_id INTEGER NOT NULL DEFAULT 0,
+            ssl_forced INTEGER NOT NULL DEFAULT 0,
+            block_exploits INTEGER NOT NULL DEFAULT 0,
+            advanced_config TEXT NOT NULL DEFAULT '',
+            meta TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            hsts_enabled INTEGER NOT NULL DEFAULT 0,
+            hsts_subdomains INTEGER NOT NULL DEFAULT 0,
+            forward_scheme TEXT NOT NULL DEFAULT '$scheme',
+            forward_http_code INTEGER NOT NULL DEFAULT 302
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS dead_host (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            owner_user_id INTEGER NOT NULL DEFAULT 1,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            domain_names TEXT NOT NULL,
+            certificate_id INTEGER NOT NULL DEFAULT 0,
+            ssl_forced INTEGER NOT NULL DEFAULT 0,
+            advanced_config TEXT NOT NULL DEFAULT '',
+            meta TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1,
+            hsts_enabled INTEGER NOT NULL DEFAULT 0,
+            hsts_subdomains INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stream (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            owner_user_id INTEGER NOT NULL DEFAULT 1,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            incoming_port INTEGER NOT NULL,
+            forwarding_host TEXT NOT NULL,
+            forwarding_port INTEGER NOT NULL,
+            tcp_forwarding INTEGER NOT NULL DEFAULT 0,
+            udp_forwarding INTEGER NOT NULL DEFAULT 0,
+            meta TEXT NOT NULL DEFAULT '{}',
+            enabled INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_list (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            owner_user_id INTEGER NOT NULL DEFAULT 1,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            name TEXT NOT NULL,
+            meta TEXT NOT NULL DEFAULT '{}',
+            satisfy_any INTEGER NOT NULL DEFAULT 0,
+            pass_auth INTEGER NOT NULL DEFAULT 1
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_list_auth (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            access_list_id INTEGER NOT NULL,
+            username TEXT NOT NULL,
+            password TEXT NOT NULL,
+            meta TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS access_list_client (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            access_list_id INTEGER NOT NULL,
+            address TEXT NOT NULL,
+            directive TEXT NOT NULL,
+            meta TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+
+    c.execute(
+        """
+        CREATE TABLE IF NOT EXISTS audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            modified_on DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            user_id INTEGER NOT NULL,
+            object_type TEXT NOT NULL DEFAULT '',
+            object_id INTEGER NOT NULL DEFAULT 0,
+            action TEXT NOT NULL,
+            meta TEXT NOT NULL DEFAULT '{}'
+        )
+        """
+    )
+
+    # --- knex migration 记录表 ---
+    # migrate.js 显式调用 db.migrate.latest({tableName: 'migrations', ...})，
+    # 覆盖了 knex 默认表名，因此必须使用 migrations / migrations_lock
+
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS migrations_lock (
@@ -222,8 +367,6 @@ def create_tables(conn: sqlite3.Connection):
         """
     )
 
-    # migrations (required by NPM/knex migration system)
-    # NPM v2.x uses tableName: 'migrations', not 'knex_migrations'
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS migrations (
@@ -258,6 +401,16 @@ def insert_user(conn: sqlite3.Connection):
         VALUES (?, ?, ?, ?, ?, ?)
         """,
         (now, now, user_id, "password", DEFAULT_PASSWORD_HASH, json.dumps({})),
+    )
+
+    c.execute(
+        """
+        INSERT INTO user_permission
+        (created_on, modified_on, user_id, visibility, proxy_hosts,
+         redirection_hosts, dead_hosts, streams, access_lists, certificates)
+        VALUES (?, ?, ?, 'all', 'manage', 'manage', 'manage', 'manage', 'manage', 'manage')
+        """,
+        (now, now, user_id),
     )
 
     conn.commit()
@@ -392,10 +545,10 @@ MIGRATION_NAMES = [
 
 
 def _insert_knex_migrations(conn: sqlite3.Connection):
-    """插入 migration 记录，让 NPM 认为数据库已是最新版本。
+    """插入 migration 记录到 migrations 表，让 NPM 认为数据库已是最新版本。
 
-    NPM v2.x 使用表名 'migrations'（db.js 中 tableName: 'migrations'），
-    不是 knex 默认的 'knex_migrations'。
+    migrate.js 显式调用 db.migrate.latest({tableName: 'migrations', ...})，
+    因此表名必须是 migrations。
     """
     c = conn.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -517,7 +670,7 @@ def generate_nginx_configs(conn: sqlite3.Connection):
                certificate_id, ssl_forced, http2_support, block_exploits,
                hsts_enabled, allow_websocket_upgrade, advanced_config
         FROM proxy_host
-        WHERE is_deleted = 0 AND disabled = 0
+        WHERE is_deleted = 0 AND enabled = 1
     """)
 
     count = 0
