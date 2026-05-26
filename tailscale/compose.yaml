@@ -26,6 +26,7 @@ services:
       - "443:443"
       - "127.0.0.1:81:81"
       - "41641:41641/udp"
+      - "2220-2230:2220-2230"
       - "${DERP_STUN_PORT:-3478}:${DERP_STUN_PORT:-3478}/udp"
     healthcheck:
       test: ["CMD", "tailscale", "status"]

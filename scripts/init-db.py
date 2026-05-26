@@ -111,6 +111,22 @@ def load_services():
     return data.get("services") or []
 
 
+def load_streams():
+    """读取 config/services.yml，返回预定义流代理列表。"""
+    if not SERVICES_FILE.exists():
+        return []
+
+    try:
+        import yaml
+    except ImportError:
+        return []
+
+    with open(SERVICES_FILE, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+
+    return data.get("streams") or []
+
+
 def create_tables(conn: sqlite3.Connection):
     """创建 NPM 所需的 SQLite 表（v2.11.3 全部 migration 完成后的最终 schema）。
 
@@ -489,6 +505,35 @@ def insert_proxy_host(
     conn.commit()
     return c.lastrowid
 
+def insert_stream(
+    conn: sqlite3.Connection,
+    incoming_port: int,
+    forwarding_host: str,
+    forwarding_port: int,
+    protocol: str = "tcp",
+):
+    """插入 Stream 记录（TCP/UDP 流代理）。"""
+    c = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    tcp_forwarding = 1 if protocol == "tcp" else 0
+    udp_forwarding = 1 if protocol == "udp" else 0
+
+    c.execute(
+        """
+        INSERT INTO stream
+        (created_on, modified_on, owner_user_id, incoming_port,
+         forwarding_host, forwarding_port, tcp_forwarding, udp_forwarding,
+         meta, enabled)
+        VALUES (?, ?, 1, ?, ?, ?, ?, ?, '{}', 1)
+        """,
+        (now, now, incoming_port, forwarding_host, forwarding_port,
+         tcp_forwarding, udp_forwarding),
+    )
+
+    conn.commit()
+    return c.lastrowid
+
 
 def setup_custom_ssl(cert_dir: Path, domain: str):
     """创建 custom_ssl 目录结构并复制证书文件。"""
@@ -572,6 +617,8 @@ def _insert_knex_migrations(conn: sqlite3.Connection):
 
 
 NGINX_PROXY_HOST_DIR = DATA_DIR / "nginx" / "proxy_host"
+NGINX_STREAM_DIR = DATA_DIR / "nginx" / "stream"
+
 
 
 def _nginx_conf_header(domain_names):
@@ -706,6 +753,49 @@ def generate_nginx_configs(conn: sqlite3.Connection):
     return count
 
 
+def generate_stream_nginx_configs(conn: sqlite3.Connection):
+    """从数据库生成 /data/nginx/stream/*.conf 文件。
+
+    NPM 仅在通过 API 创建/更新 Stream 时生成 nginx 配置，
+    不会在启动时从数据库重建。因此首次部署时必须手动生成这些文件。
+    """
+    NGINX_STREAM_DIR.mkdir(parents=True, exist_ok=True)
+
+    c = conn.cursor()
+    c.execute("""
+        SELECT id, incoming_port, forwarding_host, forwarding_port,
+               tcp_forwarding, udp_forwarding
+        FROM stream
+        WHERE is_deleted = 0 AND enabled = 1
+    """)
+
+    count = 0
+    for row in c.fetchall():
+        stream_id, incoming_port, forwarding_host, forwarding_port, \
+            tcp_forwarding, udp_forwarding = row
+
+        protocol = "tcp" if tcp_forwarding else "udp"
+        conf_content = (
+            f"# ------------------------------------------------------------\n"
+            f"# Stream: {protocol} {incoming_port} -> {forwarding_host}:{forwarding_port}\n"
+            f"# ------------------------------------------------------------\n\n"
+            f"server {{\n"
+            f"    listen {incoming_port};\n"
+            f"    proxy_pass {forwarding_host}:{forwarding_port};\n"
+            f"    proxy_connect_timeout 1h;\n"
+            f"    proxy_timeout 1h;\n"
+            f"}}\n"
+        )
+
+        conf_path = NGINX_STREAM_DIR / f"{stream_id}.conf"
+        conf_path.write_text(conf_content, encoding="utf-8")
+        print(f"Generated stream config: {conf_path}")
+        count += 1
+
+    print(f"Generated {count} stream nginx config(s).")
+    return count
+
+
 def _fix_permissions():
     """调整 npm/data 目录的属主为 NPM 容器的 UID (911)。"""
     try:
@@ -750,6 +840,7 @@ def main():
         try:
             # 重新生成 nginx 配置文件（容器重建后可能需要）
             generate_nginx_configs(conn)
+            generate_stream_nginx_configs(conn)
         finally:
             conn.close()
         _fix_permissions()
@@ -810,6 +901,20 @@ def main():
 
         # 插入 knex migration 记录
         _insert_knex_migrations(conn)
+
+        # 从 services.yml 加载流代理（TCP/UDP）
+        streams = load_streams()
+        for s in streams:
+            insert_stream(
+                conn,
+                incoming_port=s["incoming_port"],
+                forwarding_host=s["target_host"],
+                forwarding_port=s["target_port"],
+                protocol=s.get("protocol", "tcp"),
+            )
+
+        # 生成 stream nginx 配置文件
+        generate_stream_nginx_configs(conn)
 
         # 生成 nginx proxy host 配置文件
         # NPM 只在通过 API 操作时才生成配置，启动时不会从数据库重建

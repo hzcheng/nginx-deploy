@@ -7,8 +7,23 @@ services:
     domain: nginx.teraai.cn
     target: http://127.0.0.1:81
 
+  - name: derper
+    domain: derper.teraai.cn
+    target: http://127.0.0.1:8080
+    websocket: true
+
   # 示例：添加家里 Home Assistant
   # - name: home_assistant
   #   domain: ha.teraai.cn
   #   target: http://100.101.7.100:8123
   #   websocket: true
+
+# TCP/UDP 流代理（端口号需在 tailscale/compose.yaml 中暴露）
+# 默认已暴露端口范围 2220-2230，可按需分配
+streams:
+  # 示例：代理另一台机器的 SSH
+  # - name: office_ssh
+  #   incoming_port: 2222
+  #   target_host: 100.x.x.x
+  #   target_port: 22
+  #   protocol: tcp
